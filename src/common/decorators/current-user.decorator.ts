@@ -5,8 +5,12 @@ import type { JwtPayload } from '../../auth/auth.types';
 type AuthenticatedRequest = Request & { user: JwtPayload };
 
 export const CurrentUser = createParamDecorator(
-  (_data: unknown, ctx: ExecutionContext): JwtPayload => {
+  (
+    data: keyof JwtPayload | undefined,
+    ctx: ExecutionContext,
+  ): JwtPayload | JwtPayload[keyof JwtPayload] => {
     const request = ctx.switchToHttp().getRequest<AuthenticatedRequest>();
-    return request.user;
+    const user = request.user;
+    return data ? user?.[data] : user;
   },
 );

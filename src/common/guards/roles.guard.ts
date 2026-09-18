@@ -1,9 +1,11 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { UserRole } from '@prisma/client';
 import type { Request } from 'express';
 import type { JwtPayload } from '../../auth/auth.types';
 import { ROLES_KEY } from '../decorators/roles.decorator';
@@ -15,7 +17,7 @@ export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(context: ExecutionContext): boolean {
-    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
+    const requiredRoles = this.reflector.getAllAndOverride<UserRole[]>(
       ROLES_KEY,
       [context.getHandler(), context.getClass()],
     );
@@ -28,9 +30,15 @@ export class RolesGuard implements CanActivate {
     const user = request.user;
 
     if (!user) {
-      return false;
+      throw new ForbiddenException('Authentication required');
     }
 
-    return requiredRoles.includes(user.role);
+    if (!requiredRoles.includes(user.role)) {
+      throw new ForbiddenException(
+        `Requires one of roles: ${requiredRoles.join(', ')}`,
+      );
+    }
+
+    return true;
   }
 }
