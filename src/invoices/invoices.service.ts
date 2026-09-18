@@ -20,8 +20,19 @@ import { nextInvoiceNumber } from '../common/utils/numbering';
 import { getOrderTotal } from '../common/utils/orders';
 import { OpsService } from '../ops/ops.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { buildInvoicePdf, invoicePdfFilename } from './invoice-pdf';
 
 type InvoiceWithCompany = Invoice & { company: Company };
+
+type InvoicePdfSource = InvoiceWithCompany & {
+  order: Order & { items: OrderItem[] };
+  client: { addresses: { id: string; line: string }[] };
+};
+
+export type InvoicePdfFile = {
+  buffer: Buffer;
+  filename: string;
+};
 
 type OrderForInvoice = Order & {
   company: Company;
@@ -139,6 +150,42 @@ export class InvoicesService {
     return this.toView(invoice);
   }
 
+  async getPdf(user: JwtPayload, invoiceId: string): Promise<InvoicePdfFile> {
+    const invoice = assertFound(
+      await this.prisma.invoice.findUnique({
+        where: { id: invoiceId },
+        include: {
+          company: true,
+          order: { include: { items: true } },
+          client: { include: { addresses: true } },
+        },
+      }),
+      'Invoice not found',
+    );
+    assertCompanyAccess(user, invoice.companyId);
+
+    const buffer = await buildInvoicePdf({
+      companyName: invoice.company.name,
+      invoiceNumber: invoice.number,
+      orderNumber: invoice.orderNumber,
+      clientName: invoice.clientName,
+      clientAddress: resolveInvoiceAddress(invoice),
+      total: invoice.total,
+      paidAt: invoice.paidAt,
+      items: invoice.order.items.map((item) => ({
+        name: item.name,
+        sku: item.sku,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })),
+    });
+
+    return {
+      buffer,
+      filename: invoicePdfFilename(invoice.number),
+    };
+  }
+
   toView(invoice: InvoiceWithCompany): InvoiceView {
     return {
       id: invoice.id,
@@ -156,3 +203,20 @@ export class InvoicesService {
     };
   }
 }
+
+const resolveInvoiceAddress = (invoice: InvoicePdfSource): string => {
+  const destination = invoice.order.destination?.trim();
+  if (destination) {
+    return destination;
+  }
+
+  const byId = invoice.client.addresses
+    .find((address) => address.id === invoice.order.addressId)
+    ?.line.trim();
+  if (byId) {
+    return byId;
+  }
+
+  const first = invoice.client.addresses.find((address) => address.line.trim());
+  return first?.line.trim() || '—';
+};
