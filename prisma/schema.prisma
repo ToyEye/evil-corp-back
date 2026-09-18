@@ -1,5 +1,5 @@
-// Multi-tenant schema will be expanded in a later step.
-// IDs are strings to match frontend dummy data 1:1.
+// Multi-tenant schema. String IDs match frontend dummy data 1:1.
+// Do not run migrate in this step — schema only.
 
 generator client {
   provider = "prisma-client-js"
@@ -8,4 +8,569 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ─── Enums (values mapped to frontend Zod strings where needed) ─────────────
+
+enum CompanyType {
+  platform
+  client
+}
+
+enum UserRole {
+  SEO
+  Driver
+  Storekeeper
+  Supply
+  Accountant
+  Staff
+  Client
+  Support
+  Admin
+}
+
+enum InventoryCategory {
+  Packaging
+  SpareParts  @map("Spare parts")
+  Consumables
+  Equipment
+  Safety
+}
+
+enum WarehouseZone {
+  Dock
+  Chill
+  Bulk
+  Pick
+  Safety
+}
+
+enum SupplierType {
+  Manufacturer
+  Distributor
+  Wholesaler
+  Service
+  Carrier
+}
+
+enum OrderStatus {
+  New
+  Paid
+}
+
+enum FulfillmentStatus {
+  Waiting
+  Reserved
+  Picking
+  Ready
+}
+
+enum DeliveryStatus {
+  New
+  Planned
+  InTransit @map("In transit")
+  Arrived
+  Failed
+  Canceled
+  Done
+}
+
+enum FailureReason {
+  CustomerAbsent     @map("Customer absent")
+  Refused
+  WrongAddress       @map("Wrong address")
+  DamagedGoods       @map("Damaged goods")
+  CouldNotAccessSite @map("Could not access site")
+  Other
+}
+
+enum VehicleType {
+  Van
+  Truck
+  Reefer
+}
+
+enum InvoiceStatus {
+  Paid
+}
+
+enum RestockStatus {
+  New
+  Confirmed
+  Delivered
+  Received
+}
+
+enum RestockPurpose {
+  order
+  warehouse
+}
+
+enum ActivityEntityType {
+  order
+  delivery
+  restock
+  invoice
+}
+
+enum AppPageId {
+  dashboard
+  users
+  settings
+  warehouse
+  suppliers
+  clients
+  deliveries
+  orders
+  invoices
+  support
+}
+
+enum JoinRequestStatus {
+  pending
+  approved
+  rejected
+}
+
+// ─── Core tenancy ───────────────────────────────────────────────────────────
+
+model Company {
+  id        String      @id
+  name      String      @unique
+  type      CompanyType
+  iconUrl   String?
+  depotLat  Float?
+  depotLng  Float?
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  users           User[]
+  clients         Client[]
+  inventoryItems  InventoryItem[]
+  suppliers       Supplier[]
+  orders          Order[]
+  deliveries      Delivery[]
+  vehicles        Vehicle[]
+  routes          DispatchRoute[]
+  invoices        Invoice[]
+  restockRequests RestockRequest[]
+  notifications   AppNotification[]
+  activityEvents  ActivityEvent[]
+  supportThreads  SupportThread[]
+}
+
+model User {
+  id           String   @id
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole
+  companyId    String
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  drivenRoutes            DispatchRoute[]   @relation("RouteDriver")
+  assignedDeliveries      Delivery[]        @relation("DeliveryDriver")
+  restockRequests         RestockRequest[]  @relation("RestockRequester")
+  notifications           AppNotification[] @relation("NotificationRecipient")
+  activityEvents          ActivityEvent[]   @relation("ActivityActor")
+  supportThreadsRequested SupportThread[]   @relation("SupportRequester")
+  supportMessages         SupportMessage[]  @relation("SupportAuthor")
+
+  @@index([companyId])
+}
+
+// ─── Clients ────────────────────────────────────────────────────────────────
+
+model Client {
+  id        String   @id
+  name      String
+  phone     String
+  email     String
+  addedAt   DateTime @db.Date
+  note      String   @default("")
+  companyId String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company    Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  addresses  ClientAddress[]
+  orders     Order[]
+  deliveries Delivery[]
+  invoices   Invoice[]
+
+  @@index([companyId])
+}
+
+model ClientAddress {
+  id       String @id
+  clientId String
+  line     String
+  lat      Float?
+  lng      Float?
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+}
+
+// ─── Inventory & suppliers ──────────────────────────────────────────────────
+
+model InventoryItem {
+  id          String            @id
+  sku         String
+  name        String
+  description String
+  quantity    Int
+  price       Float
+  category    InventoryCategory
+  zone        WarehouseZone
+  bin         String
+  companyId   String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  restockRequests RestockRequest[]
+
+  @@unique([companyId, sku])
+  @@index([companyId])
+}
+
+model Supplier {
+  id            String       @id
+  name          String
+  type          SupplierType
+  addedAt       DateTime     @db.Date
+  description   String
+  doesNotSupply String
+  notes         String       @default("")
+  companyId     String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([companyId])
+}
+
+// ─── Orders ─────────────────────────────────────────────────────────────────
+
+model Order {
+  id                String            @id
+  number            String
+  clientId          String
+  /// Snapshot of client name at order time (API denormalizes the same way).
+  clientName        String
+  addressId         String?
+  destination       String?
+  notes             String            @default("")
+  status            OrderStatus
+  fulfillmentStatus FulfillmentStatus
+  companyId         String
+  createdAt         DateTime
+  updatedAt         DateTime          @updatedAt
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  client          Client           @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  items           OrderItem[]
+  invoice         Invoice?
+  deliveries      Delivery[]
+  restockRequests RestockRequest[]
+
+  @@unique([companyId, number])
+  @@index([companyId])
+  @@index([clientId])
+}
+
+model OrderItem {
+  id               String @id @default(cuid())
+  orderId          String
+  productId        String
+  sku              String
+  name             String
+  quantity         Int
+  unitPrice        Float
+  reservedQuantity Int    @default(0)
+  pickedQuantity   Int    @default(0)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+// ─── Deliveries, fleet, routes ──────────────────────────────────────────────
+
+model Delivery {
+  id              String         @id
+  number          String
+  clientId        String
+  clientName      String
+  driverId        String?
+  driverName      String?
+  addressId       String?
+  destination     String?
+  dispatchAt      DateTime?
+  deliverBy       DateTime?
+  notes           String         @default("")
+  status          DeliveryStatus
+  reservesStock   Boolean        @default(false)
+  stockWrittenOff Boolean        @default(false)
+  vehicleId       String?
+  vehicleName     String?
+  routeId         String?
+  routeNumber     String?
+  stopIndex       Int?
+  lat             Float?
+  lng             Float?
+  orderId         String?
+  orderNumber     String?
+  shippedAt       DateTime?
+  arrivedAt       DateTime?
+  completedAt     DateTime?
+  failureReason   FailureReason?
+  companyId       String
+  createdAt       DateTime
+  updatedAt       DateTime       @updatedAt
+
+  company Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  client  Client         @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  driver  User?          @relation("DeliveryDriver", fields: [driverId], references: [id], onDelete: SetNull)
+  vehicle Vehicle?       @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  route   DispatchRoute? @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  order   Order?         @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  items   DeliveryItem[]
+  proof   DeliveryProof?
+
+  @@unique([companyId, number])
+  @@index([companyId])
+  @@index([clientId])
+  @@index([driverId])
+  @@index([routeId])
+  @@index([orderId])
+}
+
+model DeliveryItem {
+  id         String @id @default(cuid())
+  deliveryId String
+  productId  String
+  sku        String
+  name       String
+  quantity   Int
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+  @@index([productId])
+}
+
+model DeliveryProof {
+  id           String    @id @default(cuid())
+  deliveryId   String    @unique
+  photoUrl     String?
+  signatureUrl String?
+  lat          Float?
+  lng          Float?
+  capturedAt   DateTime?
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+}
+
+model Vehicle {
+  id        String      @id
+  name      String
+  plate     String
+  type      VehicleType
+  maxUnits  Int
+  companyId String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  company    Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  routes     DispatchRoute[]
+  deliveries Delivery[]
+
+  @@index([companyId])
+}
+
+model DispatchRoute {
+  id          String   @id
+  number      String
+  driverId    String
+  driverName  String
+  vehicleId   String
+  vehicleName String
+  companyId   String
+  createdAt   DateTime
+  updatedAt   DateTime @updatedAt
+
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  driver     User       @relation("RouteDriver", fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle    Vehicle    @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  deliveries Delivery[]
+
+  @@unique([companyId, number])
+  @@index([companyId])
+  @@index([driverId])
+  @@index([vehicleId])
+}
+
+// ─── Restock & invoices ─────────────────────────────────────────────────────
+
+model RestockRequest {
+  id              String           @id
+  productId       String
+  sku             String
+  productName     String
+  quantity        Int
+  note            String           @default("")
+  status          RestockStatus
+  purposes        RestockPurpose[]
+  orderId         String?
+  orderNumber     String?
+  requestedById   String
+  requestedByName String
+  companyId       String
+  createdAt       DateTime
+  updatedAt       DateTime         @updatedAt
+
+  company     Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  product     InventoryItem @relation(fields: [productId], references: [id], onDelete: Restrict)
+  order       Order?        @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  requestedBy User          @relation("RestockRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@index([productId])
+  @@index([orderId])
+  @@index([requestedById])
+}
+
+model Invoice {
+  id          String        @id
+  number      String
+  orderId     String        @unique
+  orderNumber String
+  clientId    String
+  clientName  String
+  status      InvoiceStatus
+  total       Float
+  companyId   String
+  createdAt   DateTime
+  paidAt      DateTime
+  updatedAt   DateTime      @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  client  Client  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, number])
+  @@index([companyId])
+  @@index([clientId])
+}
+
+// ─── Notifications, activity, support, permissions ──────────────────────────
+
+/// Recipient is user XOR role (enforced in services).
+model AppNotification {
+  id              String    @id
+  companyId       String
+  recipientUserId String?
+  recipientRole   UserRole?
+  title           String
+  body            String
+  href            String?
+  read            Boolean   @default(false)
+  createdAt       DateTime
+
+  company       Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  recipientUser User?   @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([recipientUserId])
+  @@index([recipientRole])
+}
+
+model ActivityEvent {
+  id           String             @id
+  companyId    String
+  entityType   ActivityEntityType
+  entityId     String
+  entityNumber String
+  message      String
+  actorId      String
+  actorName    String
+  createdAt    DateTime
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  actor   User    @relation("ActivityActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([companyId])
+  @@index([entityType, entityId])
+  @@index([actorId])
+}
+
+model SupportThread {
+  id                  String    @id
+  companyId           String
+  requesterId         String
+  requesterName       String
+  requesterRole       UserRole
+  supportLastReadAt   DateTime?
+  requesterLastReadAt DateTime?
+  createdAt           DateTime
+  updatedAt           DateTime
+
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  requester User             @relation("SupportRequester", fields: [requesterId], references: [id], onDelete: Restrict)
+  messages  SupportMessage[]
+
+  @@index([companyId])
+  @@index([requesterId])
+}
+
+model SupportMessage {
+  id         String   @id
+  threadId   String
+  authorId   String
+  authorName String
+  authorRole UserRole
+  body       String
+  createdAt  DateTime
+
+  thread SupportThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  author User          @relation("SupportAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([threadId])
+  @@index([authorId])
+}
+
+/// Page access matrix: pageId → roles[]. Seeded from defaultPageAccess.
+model PageAccess {
+  pageId AppPageId  @id
+  roles  UserRole[]
+}
+
+// ─── Join requests (public signup replacement) ──────────────────────────────
+
+model JoinRequest {
+  id           String            @id @default(cuid())
+  contactName  String
+  email        String
+  message      String
+  companyName  String?
+  depotLat     Float?
+  depotLng     Float?
+  /// Optional password the applicant set for the future SEO account.
+  passwordHash String?
+  status       JoinRequestStatus @default(pending)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([status])
+  @@index([email])
 }
