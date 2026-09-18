@@ -16,6 +16,7 @@ import { InventoryModule } from './inventory/inventory.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { JoinRequestsModule } from './join-requests/join-requests.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { OpsModule } from './ops/ops.module';
 import { OrdersModule } from './orders/orders.module';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -33,6 +34,7 @@ import { VehiclesModule } from './vehicles/vehicles.module';
       envFilePath: ['.env'],
     }),
     PrismaModule,
+    OpsModule,
     AuthModule,
     CompaniesModule,
     UsersModule,
