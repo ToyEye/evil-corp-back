@@ -15,11 +15,12 @@ NestJS + Prisma + PostgreSQL backend for the Evil Corp SPA.
 cp .env.example .env
 docker compose up -d
 npm install
-npx prisma generate
-# later: npx prisma migrate dev && npx prisma db seed
+npx prisma migrate dev
+npx prisma db seed
 npm run start:dev
 ```
 
 - API prefix: `/api`
 - CORS: `http://localhost:5173`
-- Seed password (when applied): `Password123!` for all users
+- Postgres host port: `5433` (container `5432`; avoids clash with a local Windows PostgreSQL on `5432`)
+- Seed password: `Password123!` for all users
